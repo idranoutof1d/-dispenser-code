@@ -1,0 +1,221 @@
+long long int time = 0;
+int yak [4][4] = {
+  {1,2,3,4}, //yaktong1 , dis1,dis2,dis3,dis4
+  {2,2,3,1}, //yaktong2
+  {1,0,3,1}, //yaktong3
+  {0,1,2,1} //yaktong4
+};
+// ---------------- Pin Configuration ----------------
+const uint8_t DATA_PIN  = 11;  // SER / DS -> to 74HC595 SER
+const uint8_t CLOCK_PIN = 10;  // SHCP -> to 74HC595 SRCLK
+const uint8_t LATCH_PIN = 9;  // STCP -> to 74HC595 RCLK
+const uint8_t IR = 7;
+const uint8_t BUTTON = 8;
+
+// ---------------- Motor / Shift Config ----------------
+const uint16_t STEPS_PER_REV = 2048; // 28BYJ-48 full-step
+const uint8_t NUM_MOTORS = 5;        // we drive motors 0..4
+// outputs mapping: motor m uses outputs (m*4 + 0..3) mapped to Q0..Q19 of chained HC595s
+
+// 4-step full-step sequence (bit0..bit3 = coils A..D)
+const uint8_t stepSeq[4] = { 0b0001, 0b0010, 0b0100, 0b1000 };
+
+// --- fast port access (resolved in setup) ---
+volatile uint8_t *dataPort, *clockPort, *latchPort;
+uint8_t dataMask, clockMask, latchMask;
+
+// 24-bit buffer (3 x 8-bit registers), we use bits 0..19
+uint8_t shiftData[3] = {0,0,0};
+
+// --- helper inline ops ---
+inline void setHigh(volatile uint8_t *p, uint8_t m){ *p |= m; }
+inline void setLow (volatile uint8_t *p, uint8_t m){ *p &= ~m; }
+inline void pulseClock(){ setHigh(clockPort, clockMask); setLow(clockPort, clockMask); }
+inline void pulseLatch(){ setHigh(latchPort, latchMask); setLow(latchPort, latchMask); }
+
+// shift out MSB-first so that sending bytes[2],bytes[1],bytes[0] places bytes[0] in last chip.
+// This is robust for typical cascaded wiring; if your chain is reversed swap the send order.
+void shiftOutFast(uint8_t *bytes, uint8_t len){
+  for(int b = len - 1; b >= 0; --b){
+    for(int bit = 7; bit >= 0; --bit){
+      if(bytes[b] & (1 << bit)) setHigh(dataPort, dataMask);
+      else                       setLow (dataPort, dataMask);
+      pulseClock();
+    }
+  }
+  // latch is done by caller to allow grouping multiple writes if wanted
+}
+
+// Build shiftData[] from the current stepIndex of all steppers
+void packShiftDataFromSteppers(); // forward decl — defined after Stepper class
+
+// Update physical outputs (send shiftData)
+inline void updateShiftRegisters(){ shiftOutFast(shiftData, 3); pulseLatch(); }
+
+// ---------------- Stepper class ----------------
+class Stepper {
+public:
+  const uint8_t idx;        // motor index 0..4
+  int8_t direction;         // +1 or -1
+  unsigned long stepDelay;  // µs per step (default)
+  int8_t stepIndex;         // 0..3 pattern index
+  long currentStep;         // absolute step counter (can be negative)
+  long homeStep;            // home reference step (defaults to 0)
+
+  Stepper(uint8_t i) : idx(i), direction(1), stepDelay(2000), stepIndex(0), currentStep(0), homeStep(0) {}
+
+  void setSpeed(unsigned long microsecondsPerStep){ stepDelay = microsecondsPerStep; }
+  void setDirection(int dir){ direction = (dir>=0) ? 1 : -1; }
+
+  // Single physical step (blocking by stepDelay)
+  void singleStepBlocking(){
+    // update logical index and absolute step
+    stepIndex = (stepIndex + direction + 4) & 0x03; // wrap 0..3
+    currentStep += direction;
+    // re-pack all motors' patterns and push to registers
+    packShiftDataFromSteppers();
+    updateShiftRegisters();
+    delayMicroseconds(stepDelay);
+  }
+
+  // Move exactly `degrees` (positive or negative). Optional speed override (µs/step).
+  void angleRotate(float degrees, long optionalSpeedUs = 0){
+    if(optionalSpeedUs > 0) { unsigned long prev = stepDelay; setSpeed(optionalSpeedUs); moveStepsFromDegrees(degrees); setSpeed(prev); }
+    else moveStepsFromDegrees(degrees);
+  }
+
+  // Mark current position as home (homeStep = currentStep)
+  void setHome(){ homeStep = currentStep; }
+
+  // Move to recorded home position (blocking). optionalSpeedUs override (µs/step)
+  void home(long optionalSpeedUs = 0){
+    long stepsToGo = homeStep - currentStep; // can be negative
+    if(optionalSpeedUs > 0){ unsigned long prev = stepDelay; setSpeed(optionalSpeedUs); moveStepsAbsolute(stepsToGo); setSpeed(prev); }
+    else moveStepsAbsolute(stepsToGo);
+  }
+
+  // get angle relative to home (degrees)
+  float getAngle(){
+    long rel = currentStep - homeStep;
+    return ( (float)rel / (float)STEPS_PER_REV ) * 360.0;
+  }
+
+private:
+  void moveStepsFromDegrees(float deg){
+    long steps = lround((deg/360.0) * (long)STEPS_PER_REV);
+    moveStepsAbsolute(steps);
+  }
+
+  void moveStepsAbsolute(long steps){ // steps can be negative
+    if(steps == 0) return;
+    if(steps > 0) setDirection(1); else setDirection(-1);
+    long count = labs(steps);
+    for(long i=0; i<count; ++i) singleStepBlocking();
+  }
+};
+
+// --- create Stepper objects
+Stepper *steppers[NUM_MOTORS];
+
+void packShiftDataFromSteppers(){
+  // zero buffer
+  shiftData[0]=shiftData[1]=shiftData[2]=0;
+  // for each motor, take its stepIndex and map its 4 coil bits to bits in shiftData
+  for(uint8_t m=0; m<NUM_MOTORS; ++m){
+    uint8_t pattern = stepSeq[ (steppers[m]->stepIndex) & 0x03 ] & 0x0F;
+    for(uint8_t b=0; b<4; ++b){
+      if(pattern & (1<<b)){
+        uint8_t out = m*4 + b;          // output bit number 0..19
+        uint8_t byteIdx = out >> 3;     // out/8
+        uint8_t bitIdx  = out & 7;      // out%8
+        shiftData[byteIdx] |= (1 << bitIdx);
+      }
+    }
+  }
+}
+
+//base homing function
+void homeBase(){
+  
+  if(digitalRead(IR)==LOW){
+    digitalWrite(13,HIGH);
+    steppers[4]->setSpeed(2500);
+    steppers[4]->angleRotate(10);
+    digitalWrite(13,LOW);
+  }
+  
+  while(digitalRead(IR)==LOW){
+    steppers[4]->angleRotate(1);
+  }
+  delay(100);//wait for 100ms
+  steppers[4]->setHome();
+}
+
+void dispense(int target_yak){ //must have homed before this!!
+  //move to target
+  //
+
+  for(int n=0;n<=3;n++){ //
+    for(int i=0;i<=yak[target_yak][n];i++){
+      //rotate to appropriate dispenser based on yaktong
+      if(n==0){
+        
+      }
+      yakDispense(n);
+    }
+  }
+  digitalWrite(13,HIGH);
+  delay(50);
+  digitalWrite(13,LOW);
+}
+
+void yakDispense(int n){  //function that dispenses only one yak based on stepper nubmer(yaktong ref)
+  steppers[4-n]->setDirection(1);
+  steppers[4-n]->angleRotate(-80);
+}
+
+// ---------------- Setup & Loop ----------------
+void setup(){
+  // pinInit
+  pinMode(DATA_PIN, OUTPUT);
+  pinMode(CLOCK_PIN, OUTPUT);
+  pinMode(LATCH_PIN, OUTPUT);
+  pinMode(BUTTON,INPUT_PULLUP);
+  pinMode(IR,INPUT);
+  pinMode(13,OUTPUT);
+
+  // resolve ports/masks for fast toggles
+  dataPort  = portOutputRegister(digitalPinToPort(DATA_PIN));
+  clockPort = portOutputRegister(digitalPinToPort(CLOCK_PIN));
+  latchPort = portOutputRegister(digitalPinToPort(LATCH_PIN));
+  dataMask  = digitalPinToBitMask(DATA_PIN);
+  clockMask = digitalPinToBitMask(CLOCK_PIN);
+  latchMask = digitalPinToBitMask(LATCH_PIN);
+
+  // instantiate stepper objects
+  for(uint8_t i=0;i<NUM_MOTORS;i++) steppers[i] = new Stepper(i);
+
+  // IMPORTANT: hardware wiring notes (do this on the PCB / breadboard)
+  // - Tie 74HC595 OE (/G) to GND (enable outputs)
+  // - Tie 74HC595 MR (/RESET) to Vcc (HIGH) so it doesn't reset
+  // - Make sure all grounds are common (Arduino GND, ULN2003 GND, motor supply GND)
+  // - Motors should have separate 5V supply capable of current; do NOT drive multiple motors from Arduino 5V regulator
+  // - AREF can be left or decoupled; connecting AVcc to 5V is required for the ATmega
+  //
+  // initial state
+  packShiftDataFromSteppers();
+  updateShiftRegisters();
+}
+
+void loop(){
+  //steppers[4]->setDirection(1);
+  steppers[4]->angleRotate(90);
+  digitalWrite(13,HIGH);
+  //steppers[4]->setDirection(-1);
+  steppers[4]->angleRotate(-90);
+  digitalWrite(13,LOW);
+  yakDispense(1);
+  yakDispense(2);
+  yakDispense(3);
+  yakDispense(4);
+}
