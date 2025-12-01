@@ -152,18 +152,51 @@ void homeBase(){
 }
 
 void dispense(int target_yak){ //must have homed before this!!
-  //move to target
-  //
-
-  for(int n=0;n<=3;n++){ //
-    for(int i=0;i<=yak[target_yak][n];i++){
-      //rotate to appropriate dispenser based on yaktong
-      if(n==0){
-        
-      }
-      yakDispense(n);
-    }
+  if(target_yak==1){
+    for(int i=0;i<=yak[0][0];i++){yakDispense(1);}//dispense n amounts of yak1 into yaktong1
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[0][1];i++){yakDispense(2);}//dispense n amounts of yak1 into yaktong1
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[0][2];i++){yakDispense(3);}//dispense n amounts of yak1 into yaktong1
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[0][3];i++){yakDispense(4);}//dispense n amounts of yak1 into yaktong1
   }
+  else if(target_yak==2){
+    steppers[4]->angleRotate(90);
+    /////
+    for(int i=0;i<=yak[1][0];i++){yakDispense(1);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[1][1];i++){yakDispense(2);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[1][2];i++){yakDispense(3);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[1][3];i++){yakDispense(4);}//dispense n amounts of yak1 into yaktong2
+  }
+  else if(target_yak==3){
+    steppers[4]->angleRotate(180);
+    /////
+    for(int i=0;i<=yak[2][0];i++){yakDispense(1);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[2][1];i++){yakDispense(2);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[2][2];i++){yakDispense(3);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[2][3];i++){yakDispense(4);}//dispense n amounts of yak1 into yaktong2
+  
+  }
+  else if(target_yak==4){
+    steppers[4]->angleRotate(270);
+    /////
+    for(int i=0;i<=yak[3][0];i++){yakDispense(1);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[3][1];i++){yakDispense(2);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[3][2];i++){yakDispense(3);}//dispense n amounts of yak1 into yaktong2
+    steppers[4]->angleRotate(-90);
+    for(int i=0;i<=yak[3][3];i++){yakDispense(4);}//dispense n amounts of yak1 into yaktong2
+  }
+
+
   digitalWrite(13,HIGH);
   delay(50);
   digitalWrite(13,LOW);
@@ -174,6 +207,22 @@ void yakDispense(int n){  //function that dispenses only one yak based on steppe
   steppers[4-n]->angleRotate(-80);
 }
 
+void debug(){
+  homeBase();
+  steppers[4]->angleRotate(90);
+  digitalWrite(13,HIGH);
+  
+  steppers[4]->angleRotate(-90);
+  digitalWrite(13,LOW);
+  yakDispense(1);
+  yakDispense(2);
+  yakDispense(3);
+  yakDispense(4);
+}
+
+void blinkled(){
+  digitalWrite(13,HIGH);delay(500);digitalWrite(13,LOW);
+}
 // ---------------- Setup & Loop ----------------
 void setup(){
   // pinInit
@@ -208,14 +257,25 @@ void setup(){
 }
 
 void loop(){
-  //steppers[4]->setDirection(1);
-  steppers[4]->angleRotate(90);
-  digitalWrite(13,HIGH);
-  //steppers[4]->setDirection(-1);
-  steppers[4]->angleRotate(-90);
-  digitalWrite(13,LOW);
-  yakDispense(1);
-  yakDispense(2);
-  yakDispense(3);
-  yakDispense(4);
+  homeBase();
+  if(digitalRead(BUTTON)==LOW){
+    delay(10);
+    if(digitalRead(BUTTON)==LOW){
+      dispense(1);
+      homeBase();
+      blinkled();
+
+      dispense(2);
+      homeBase();
+      blinkled();
+
+      dispense(3);
+      homeBase();
+      blinkled();
+
+      dispense(4);
+      homeBase();
+      blinkled();
+    }
+  }
 }
