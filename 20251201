@@ -254,11 +254,18 @@ void setup(){
   // initial state
   packShiftDataFromSteppers();
   updateShiftRegisters();
+  steppers[0]->setSpeed(3000);
+  steppers[1]->setSpeed(3000);
+  steppers[2]->setSpeed(3000);
+  steppers[3]->setSpeed(3000);
+
 }
 
 void loop(){
-  homeBase();
+  
   if(digitalRead(BUTTON)==LOW){
+    blinkled();
+    homeBase();
     delay(10);
     if(digitalRead(BUTTON)==LOW){
       dispense(1);
@@ -277,5 +284,6 @@ void loop(){
       homeBase();
       blinkled();
     }
+    digitalWrite(13,HIGH);
   }
 }
